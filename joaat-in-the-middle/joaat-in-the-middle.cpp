@@ -152,7 +152,7 @@ Collider::~Collider()
 
 static void ExpandHashes(const u32* __restrict input, u32* __restrict output, usize count, const void* __restrict suffix, usize suffix_length)
 {
-    parallel_partition(count, 0x100000, 0, [=](usize start, usize count) {
+    parallel_partition(count, 0x10000, 0, [=](usize start, usize count) {
         for (usize i = 0; i != count; ++i) {
             usize j = start + i;
 
@@ -187,7 +187,7 @@ void Collider::PopPrefix()
 
 static void ShrinkHashes(const u32* __restrict input, u32* __restrict output, usize count, const void* __restrict prefix, usize prefix_length)
 {
-    parallel_partition(count, 0x100000, 0, [=](usize start, usize count) {
+    parallel_partition(count, 0x10000, 0, [=](usize start, usize count) {
         for (usize i = 0; i != count; ++i) {
             usize j = start + i;
 
@@ -363,7 +363,7 @@ void Collider::Compile(usize prefix_table_size, usize suffix_table_size)
 
     auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(Stopwatch::now() - start).count();
 
-    printf("Built lookup in %lli\n", delta);
+    printf("Built lookup in %lli ms\n", delta);
 
     // exit(0);
 
@@ -382,7 +382,7 @@ void Collider::Compile(usize prefix_table_size, usize suffix_table_size)
 
 static void FindMatches(const u32* hashes, usize count, const FilterWord* suffix_filter, void (*callback)(void* context, usize index), void* context)
 {
-    parallel_partition(count, 0x1000000, 0, [=](usize start, usize count) {
+    parallel_partition(count, 0x10000, 0, [=](usize start, usize count) {
         for (usize i = 0; i != count; ++i) {
             usize j = start + i;
 
@@ -401,9 +401,9 @@ usize Collider::Match(HashSet<String>& found)
     const u32* hashes = Prefixes[PrefixPos].data();
     usize hash_count = Prefixes[PrefixPos].size();
 
-    printf("Matching %zu\n", hash_count);
+    // printf("Matching %zu\n", hash_count);
 
-    std::shared_mutex lock;
+    std::shared_mutex lock; // std::mutex is slow :(
     usize total = 0;
 
     auto process_match = [&](usize index) {
@@ -434,10 +434,12 @@ usize Collider::Match(HashSet<String>& found)
 
 usize Collider::Collide(HashSet<String>& found)
 {
-    printf("Collide %zu/%zu %zu/%zu\n", PrefixPos, SuffixPos, Prefixes[PrefixPos].size(), Suffixes.size());
+    // printf("Collide %zu/%zu %zu/%zu\n", PrefixPos, SuffixPos, Prefixes[PrefixPos].size(), Suffixes.size());
 
     if (PrefixPos == SuffixPos) {
-        return Match(found);
+        usize count = Match(found);
+        printf("Matches %zu/%zu\n", count, found.size());
+        return count;
     }
 
     const Vec<String>& sub_parts = Parts[PrefixPos];
@@ -467,7 +469,7 @@ Vec<String> LoadFile(std::string name)
     return results;
 }
 
-int main()
+static void TestCamStrings()
 {
     String BASE_PATH = R"(W:\Projects\joaat-in-the-middle\joaat-in-the-middle\strings\)";
     Vec<Vec<String>> PARTS;
@@ -476,7 +478,9 @@ int main()
     Vec<String> TARGET_STRINGS = LoadFile(BASE_PATH + "cam_targets.txt");
 
     for (StringView string : TARGET_STRINGS) {
-        TARGET_HASHES.push_back(joaat_partial(0, string.data(), string.size()));
+        u32 hash = joaat_partial(0, string.data(), string.size());
+
+        TARGET_HASHES.push_back(hash);
     }
 
     PARTS.push_back({ "cam" });
@@ -497,7 +501,6 @@ int main()
     PARTS.push_back({ "Metadata" });
 
     Collider collider(0, TARGET_HASHES, PARTS);
-
     collider.Compile(usize(1) << 32, usize(1) << 30);
 
     HashSet<String> found;
@@ -516,4 +519,53 @@ int main()
     }
 
     printf("Cleanup...\n");
+}
+
+Vec<String> LoadFileOrLiteral(const char* path)
+{
+    if (path[0] == '$')
+        return { path + 1 };
+
+    return LoadFile(path);
+}
+
+int main(int argc, char** argv)
+{
+    if (argc < 2) {
+        TestCamStrings();
+        return 0;
+    }
+
+    if (argc < 4) {
+        printf("Usage: %s <list_of_hashes.txt> <output_file.txt> <string_parts.txt or $string_literal>\n", argv[0]);
+        return 0;
+    }
+
+    printf("Loading hashes\n");
+
+    Vec<u32> hashes;
+
+    for (String str : LoadFileOrLiteral(argv[1])) {
+        hashes.push_back(std::stoul(str, 0, 16));
+    }
+
+    std::ofstream output(argv[2]);
+
+    Vec<Vec<String>> parts;
+
+    for (int i = 3; i < argc; ++i) {
+        parts.push_back(LoadFileOrLiteral(argv[i]));
+    }
+
+    Collider collider(0, hashes, parts);
+    collider.Compile(usize(1) << 31, usize(1) << 30);
+
+    printf("Searching\n");
+
+    HashSet<String> found;
+    usize total = collider.Collide(found);
+
+    for (String str : found) {
+        output << str << "\n";
+    }
 }
