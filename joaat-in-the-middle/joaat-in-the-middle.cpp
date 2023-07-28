@@ -429,7 +429,7 @@ usize Collider::Match(HashSet<String>& found)
 
 usize Collider::Collide(HashSet<String>& found)
 {
-    // printf("Collide %zu/%zu %zu/%zu\n", PrefixPos, SuffixPos, Prefixes[PrefixPos].size(), Suffixes.size());
+    printf("Collide %zu/%zu %zu/%zu\n", PrefixPos, SuffixPos, Prefixes[PrefixPos].size(), Suffixes.size());
 
     if (PrefixPos == SuffixPos) {
         usize count = Match(found);
@@ -464,58 +464,6 @@ Vec<String> LoadFile(std::string name)
     return results;
 }
 
-static void TestCamStrings()
-{
-    String BASE_PATH = R"(W:\Projects\joaat-in-the-middle\joaat-in-the-middle\strings\)";
-    Vec<Vec<String>> PARTS;
-    Vec<u32> TARGET_HASHES;
-
-    Vec<String> TARGET_STRINGS = LoadFile(BASE_PATH + "cam_targets.txt");
-
-    for (StringView string : TARGET_STRINGS) {
-        u32 hash = joaat_partial(0, string.data(), string.size());
-
-        TARGET_HASHES.push_back(hash);
-    }
-
-    PARTS.push_back({ "cam" });
-    PARTS.push_back({ "Cinematic" });
-
-    Vec<String> MIDDLES = LoadFile(BASE_PATH + "cam_middles.txt");
-
-    PARTS.push_back(MIDDLES);
-    PARTS.push_back(MIDDLES); // 11/12
-    PARTS.push_back(MIDDLES); // 35/57
-    PARTS.push_back(MIDDLES); // 57/182
-    PARTS.push_back(MIDDLES); // 99/497
-    PARTS.push_back(MIDDLES); // 1606/2725
-    PARTS.push_back(MIDDLES); // 106236/117888
-    PARTS.push_back(MIDDLES); // 7238934/8017458
-    // PARTS.push_back(MIDDLES);
-
-    PARTS.push_back({ "Metadata" });
-
-    Collider collider(0, TARGET_HASHES, PARTS);
-    collider.Compile(usize(1) << 32, usize(1) << 30);
-
-    HashSet<String> found;
-    usize total = collider.Collide(found);
-
-    printf("Found %zu/%zu\n", found.size(), total);
-
-    for (String str : TARGET_STRINGS) {
-        if (found.find(str) == found.end())
-            printf("Didn't find %s\n", str.c_str());
-    }
-
-    for (String str : found) {
-        if (std::find(TARGET_HASHES.begin(), TARGET_HASHES.end(), joaat_partial(0, str.data(), str.size())) == TARGET_HASHES.end())
-            printf("Invalid String: %s\n", str.c_str());
-    }
-
-    printf("Cleanup...\n");
-}
-
 Vec<String> LoadFileOrLiteral(const char* path)
 {
     if (path[0] == '$')
@@ -526,11 +474,6 @@ Vec<String> LoadFileOrLiteral(const char* path)
 
 int main(int argc, char** argv)
 {
-    if (argc < 2) {
-        TestCamStrings();
-        return 0;
-    }
-
     if (argc < 4) {
         printf("Usage: %s <list_of_hashes.txt> <output_file.txt> <string_parts.txt or $string_literal>\n", argv[0]);
         return 0;
