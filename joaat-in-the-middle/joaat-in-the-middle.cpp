@@ -541,7 +541,7 @@ int main(int argc, char** argv)
     Vec<u32> hashes;
 
     for (String str : LoadFileOrLiteral(argv[1])) {
-        hashes.push_back(std::stoul(str, 0, 16));
+        hashes.push_back(joaat_definalize(std::stoul(str, 0, 16)));
     }
 
     std::ofstream output(argv[2]);
