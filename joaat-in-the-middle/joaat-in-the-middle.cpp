@@ -29,15 +29,10 @@ using HashSet = std::unordered_set<Key>;
 template <typename T, typename U>
 using Pair = std::pair<T, U>;
 
-static u8 to_lower_8(u8 value)
-{
-    return (value >= 'A' && value <= 'Z') ? (value + ('a' - 'A')) : value;
-}
-
 static u32 joaat_partial(u32 hash, const void* data, usize length)
 {
     for (usize i = 0; i != length; ++i) {
-        hash += to_lower_8(static_cast<const unsigned char*>(data)[i]);
+        hash += static_cast<const unsigned char*>(data)[i];
         hash += hash << 10; // hash *= 0x401
         hash ^= hash >> 6;
     }
@@ -55,7 +50,7 @@ static u32 joaat_partialr(u32 hash, const void* data, usize length)
         hash *= 0xC00FFC01;
 
         // inverse of hash += data[i];
-        hash -= to_lower_8(static_cast<const unsigned char*>(data)[i - 1]);
+        hash -= static_cast<const unsigned char*>(data)[i - 1];
     }
 
     return hash;
