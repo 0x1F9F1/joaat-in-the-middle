@@ -1,10 +1,10 @@
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <future>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -21,9 +21,6 @@ using StringView = std::string_view;
 
 template <typename T>
 using Vec = std::vector<T>;
-
-template <typename Key, typename Value>
-using HashMap = std::unordered_map<Key, Value>;
 
 template <typename Key>
 using HashSet = std::unordered_set<Key>;
@@ -206,7 +203,9 @@ static void ShrinkHashes(const u32* __restrict input, u32* __restrict output, us
             do {
                 __m128i hashes = _mm_loadu_si128((const __m128i*)&input[start]);
 
-                for (usize i = 0; i != prefix_length; ++i) {
+                for (usize i = prefix_length; i != 0; --i) {
+                    __m128i value = _mm_set1_epi32(static_cast<const unsigned char*>(prefix)[i - 1]);
+
                     hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 6));
                     hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 12));
                     hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 24));
@@ -214,7 +213,7 @@ static void ShrinkHashes(const u32* __restrict input, u32* __restrict output, us
                     hashes = _mm_sub_epi32(hashes, _mm_slli_epi32(hashes, 10));
                     hashes = _mm_add_epi32(hashes, _mm_slli_epi32(hashes, 20));
 
-                    hashes = _mm_sub_epi32(hashes, _mm_set1_epi32(static_cast<const unsigned char*>(prefix)[i]));
+                    hashes = _mm_sub_epi32(hashes, value);
                 }
 
                 _mm_storeu_si128((__m128i*)&output[start], hashes);
@@ -346,8 +345,6 @@ static void SortHashesWithIndices(u32* hashes, u32* indices, usize count, u32 bi
         }
     }
 }
-
-#include <chrono>
 
 using Stopwatch = std::chrono::high_resolution_clock;
 
