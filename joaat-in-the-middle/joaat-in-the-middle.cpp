@@ -8,6 +8,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include <immintrin.h>
+
 #include "parallel.h"
 
 using usize = std::size_t;
@@ -148,6 +150,23 @@ Collider::~Collider()
 static void ExpandHashes(const u32* __restrict input, u32* __restrict output, usize count, const void* __restrict suffix, usize suffix_length)
 {
     parallel_partition(count, 0x10000, 0, [=](usize start, usize count) {
+        if (count >= 4) {
+            do {
+                __m128i hashes = _mm_loadu_si128((const __m128i*)&input[start]);
+
+                for (usize i = 0; i != suffix_length; ++i) {
+                    hashes = _mm_add_epi32(hashes, _mm_set1_epi32(static_cast<const unsigned char*>(suffix)[i]));
+                    hashes = _mm_add_epi32(hashes, _mm_slli_epi32(hashes, 10));
+                    hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 6));
+                }
+
+                _mm_storeu_si128((__m128i*)&output[start], hashes);
+
+                start += 4;
+                count -= 4;
+            } while (count >= 4);
+        }
+
         for (usize i = 0; i != count; ++i) {
             usize j = start + i;
 
@@ -183,6 +202,28 @@ void Collider::PopPrefix()
 static void ShrinkHashes(const u32* __restrict input, u32* __restrict output, usize count, const void* __restrict prefix, usize prefix_length)
 {
     parallel_partition(count, 0x10000, 0, [=](usize start, usize count) {
+        if (count >= 4) {
+            do {
+                __m128i hashes = _mm_loadu_si128((const __m128i*)&input[start]);
+
+                for (usize i = 0; i != prefix_length; ++i) {
+                    hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 6));
+                    hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 12));
+                    hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 24));
+
+                    hashes = _mm_sub_epi32(hashes, _mm_slli_epi32(hashes, 10));
+                    hashes = _mm_add_epi32(hashes, _mm_slli_epi32(hashes, 20));
+
+                    hashes = _mm_sub_epi32(hashes, _mm_set1_epi32(static_cast<const unsigned char*>(prefix)[i]));
+                }
+
+                _mm_storeu_si128((__m128i*)&output[start], hashes);
+
+                start += 4;
+                count -= 4;
+            } while (count >= 4);
+        }
+
         for (usize i = 0; i != count; ++i) {
             usize j = start + i;
 
@@ -495,13 +536,19 @@ int main(int argc, char** argv)
         parts.push_back(LoadFileOrLiteral(argv[i]));
     }
 
+    auto start = Stopwatch::now();
+
     Collider collider(0, hashes, parts);
-    collider.Compile(usize(1) << 31, usize(1) << 30);
+    collider.Compile(usize(1) << 28, usize(1) << 30);
 
     printf("Searching\n");
 
     HashSet<String> found;
     usize total = collider.Collide(found);
+
+    auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(Stopwatch::now() - start).count();
+
+    printf("Found %zu/%zu results in %lli ms\n", found.size(), total, delta);
 
     for (String str : found) {
         output << str << "\n";
