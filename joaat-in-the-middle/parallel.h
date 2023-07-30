@@ -6,6 +6,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <future>
 
 template <typename UnaryFunction, typename... Args>
 inline void parallel_invoke_n(size_t thread_count, const UnaryFunction& func, const Args&... args)
@@ -17,18 +18,18 @@ inline void parallel_invoke_n(size_t thread_count, const UnaryFunction& func, co
         return;
     }
 
-    std::vector<std::thread> threads;
+    std::vector<std::future<void>> futures;
 
-    threads.reserve(thread_count);
+    futures.reserve(thread_count);
 
     for (uint32_t i = 0; i < thread_count; ++i)
     {
-        threads.emplace_back(func, i, args...);
+        futures.emplace_back(std::async(std::launch::async, func, i, args...));
     }
 
-    for (std::thread& thread : threads)
+    for (auto& fut : futures)
     {
-        thread.join();
+        fut.wait();
     }
 }
 
