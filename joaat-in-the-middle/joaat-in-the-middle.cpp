@@ -78,16 +78,16 @@ struct Collider {
 
     Vec<Vec<u32>> Prefixes {};
 
-    Vec<Pair<const String*, usize>> CurrentParts;
+    Vec<Pair<const String*, usize>> CurrentParts {};
 
     usize PrefixPos {};
     usize SuffixPos {};
 
     Vec<FilterWord> Filter {};
 
-    Vec<u32> HashIndices;
-    Vec<u32> HashBuckets;
-    Vec<u8> SubHashes;
+    Vec<u32> HashIndices {};
+    Vec<u32> HashBuckets {};
+    Vec<u8> SubHashes {};
 
     static constexpr u32 BitMixer = 0x9E3779B1;
 
@@ -506,16 +506,16 @@ usize Collider::Match(HashSet<String>& found)
                 continue;
 
             usize hash_bucket = hash >> 8;
-            auto bucket_start = hash_bucket ? HashBuckets[hash_bucket - 1] : 0;
-            auto bucket_end = HashBuckets[hash_bucket];
+            u8 sub_hash = hash & 0xFF;
 
             const u8* subs = SubHashes.data();
+            auto start = &subs[hash_bucket ? HashBuckets[hash_bucket - 1] : 0];
+            auto end = &subs[HashBuckets[hash_bucket]];
+            auto find = std::find(start, end, sub_hash);
 
-            auto find = std::equal_range(&subs[bucket_start], &subs[bucket_end], hash & 0xFF);
-
-            for (; find.first != find.second; ++find.first) {
+            for (; (find != end) && (*find == sub_hash); ++find) {
                 String prefix = GetPrefix(j);
-                String suffix = GetSuffix(HashIndices[find.first - subs]);
+                String suffix = GetSuffix(HashIndices[find - subs]);
                 add_match(prefix + suffix);
             }
         }
