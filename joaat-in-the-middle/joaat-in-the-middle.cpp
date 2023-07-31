@@ -288,7 +288,7 @@ String Collider::GetSuffix(usize index)
 
 static void SortHashesWithIndices(u32* hashes, u32* indices, usize count, u32 bit)
 {
-    if (count < 32) {
+    if (count < 16) {
         for (usize i = 1; i < count; ++i) {
             u32 hash = hashes[i];
             u32 index = indices[i];
@@ -336,7 +336,7 @@ static void SortHashesWithIndices(u32* hashes, u32* indices, usize count, u32 bi
         const auto sort_lower = [=] { SortHashesWithIndices(hashes, indices, pivot, bit); };
         const auto sort_upper = [=] { SortHashesWithIndices(hashes + pivot, indices + pivot, count - pivot, bit); };
 
-        if (pivot > 0x100000) {
+        if ((count > 0x10000) && (bit > 25)) {
             auto future = std::async(std::launch::async, sort_lower);
             sort_upper();
             future.wait();
