@@ -20,9 +20,6 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="joaat-in-the-middle.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="parallel.h">
       <Filter>Header Files</Filter>
     </ClInclude>

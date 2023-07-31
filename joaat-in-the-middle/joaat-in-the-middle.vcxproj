@@ -83,7 +83,6 @@
     <ClCompile Include="joaat-in-the-middle.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="joaat-in-the-middle.h" />
     <ClInclude Include="parallel.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

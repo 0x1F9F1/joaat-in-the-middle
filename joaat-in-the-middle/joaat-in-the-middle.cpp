@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <future>
 #include <string>
 #include <string_view>
@@ -413,8 +414,6 @@ static void FindMatches(const u32* hashes, usize count, const FilterWord* suffix
     });
 }
 
-#include <shared_mutex>
-
 usize Collider::Match(HashSet<String>& found)
 {
     const u32* hashes = Prefixes[PrefixPos].data();
@@ -422,8 +421,39 @@ usize Collider::Match(HashSet<String>& found)
 
     // printf("Matching %zu\n", hash_count);
 
-    std::shared_mutex lock; // std::mutex is slow :(
     usize total = 0;
+
+    std::mutex match_lock;
+    std::mutex buffer_lock;
+    std::mutex found_lock;
+    std::condition_variable cond;
+
+    const usize buffer_size = 0x1000;
+    auto match_buffer = std::make_unique<std::string[]>(buffer_size);
+    auto found_buffer = std::make_unique<std::string[]>(buffer_size);
+
+    std::atomic<usize> head = 0;
+    std::atomic<usize> tail = 0;
+
+    auto flush_matches = [&] {
+        std::unique_lock buffer_guard { buffer_lock };
+
+        std::unique_lock match_guard { match_lock };
+
+        match_buffer.swap(found_buffer);
+        usize count = head.exchange(0);
+        tail = 0;
+
+        match_guard.unlock();
+        cond.notify_all();
+
+        HashSet<String> sub_found(std::make_move_iterator(&found_buffer[0]), std::make_move_iterator(&found_buffer[count]));
+        buffer_guard.unlock();
+
+        std::lock_guard found_guard { found_lock };
+        found.merge(std::move(sub_found));
+        total += count;
+    };
 
     auto process_match = [&](usize index) {
         u32 hash = hashes[index];
@@ -436,9 +466,24 @@ usize Collider::Match(HashSet<String>& found)
 
             String match = prefix + suffix;
 
-            std::lock_guard guard { lock };
-            found.emplace(std::move(match));
-            ++total;
+            usize index = tail.fetch_add(1);
+
+            while (index >= buffer_size) {
+                std::unique_lock guard { match_lock };
+
+                index = tail.fetch_add(1);
+
+                if (index < buffer_size)
+                    break;
+
+                cond.wait(guard);
+            }
+
+            match_buffer[index] = std::move(match);
+
+            if (head.fetch_add(1) == buffer_size - 1) {
+                flush_matches();
+            }
         }
     };
 
@@ -447,6 +492,8 @@ usize Collider::Match(HashSet<String>& found)
             (*static_cast<decltype(&process_match)>(context))(index);
         },
         &process_match);
+
+    flush_matches();
 
     return total;
 }
@@ -473,8 +520,6 @@ usize Collider::Collide(HashSet<String>& found)
 
     return total;
 }
-
-#include <fstream>
 
 Vec<String> LoadFile(std::string name)
 {
