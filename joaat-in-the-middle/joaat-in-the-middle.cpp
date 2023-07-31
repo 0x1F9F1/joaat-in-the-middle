@@ -89,8 +89,9 @@ struct Collider {
     Vec<u32> HashBuckets;
     Vec<u8> SubHashes;
 
+    static constexpr u32 BitMixer = 0x9E3779B1;
+
     Collider(u32 seed, Vec<u32> hashes, Vec<Vec<String>> parts);
-    ~Collider();
 
     void PushPrefix(const String* suffixes, usize suffix_count);
     void PopPrefix();
@@ -142,10 +143,6 @@ Collider::Collider(u32 seed, Vec<u32> hashes, Vec<Vec<String>> parts)
     SuffixPos = Parts.size();
 
     CurrentParts.resize(Parts.size());
-}
-
-Collider::~Collider()
-{
 }
 
 static void ExpandHashes(const u32* __restrict input, u32* __restrict output, usize count, const void* __restrict suffix, usize suffix_length)
@@ -385,6 +382,9 @@ void Collider::Compile(usize prefix_table_size, usize suffix_table_size)
     usize prefix_count = Prefixes[PrefixPos].size();
     usize suffix_count = Suffixes.size();
 
+    for (usize i = 0; i < suffix_count; ++i)
+        Suffixes[i] *= BitMixer;
+
     HashIndices.resize(suffix_count);
 
     for (usize i = 0; i < suffix_count; ++i)
@@ -431,20 +431,6 @@ void Collider::Compile(usize prefix_table_size, usize suffix_table_size)
     Suffixes.clear();
 
     printf("Compiled: %zu/%zu (%zu/%zu)\n", PrefixPos, SuffixPos, prefix_count, suffix_count);
-}
-
-static void FindMatches(const u32* hashes, usize count, const FilterWord* suffix_filter, void (*callback)(void* context, usize index), void* context)
-{
-    parallel_partition(count, 0x10000, 0, [=](usize start, usize count) {
-        for (usize i = 0; i != count; ++i) {
-            usize j = start + i;
-
-            if (u32 hash = hashes[j]; bit_test(suffix_filter, hash))
-                callback(context, j);
-        }
-
-        return true;
-    });
 }
 
 usize Collider::Match(HashSet<String>& found)
@@ -509,29 +495,33 @@ usize Collider::Match(HashSet<String>& found)
         }
     };
 
-    auto process_match = [&](usize index) {
-        u32 hash = hashes[index];
+    const FilterWord* suffix_filter = Filter.data();
 
-        usize hash_bucket = hash >> 8;
-        auto bucket_start = hash_bucket ? HashBuckets[hash_bucket - 1] : 0;
-        auto bucket_end = HashBuckets[hash_bucket];
+    parallel_partition(hash_count, 0x10000, 0, [=](usize start, usize count) {
+        for (usize i = 0; i != count; ++i) {
+            usize j = start + i;
+            u32 hash = hashes[j] * BitMixer;
 
-        const u8* subs = SubHashes.data();
+            if (!bit_test(suffix_filter, hash))
+                continue;
 
-        auto find = std::equal_range(&subs[bucket_start], &subs[bucket_end], hash & 0xFF);
+            usize hash_bucket = hash >> 8;
+            auto bucket_start = hash_bucket ? HashBuckets[hash_bucket - 1] : 0;
+            auto bucket_end = HashBuckets[hash_bucket];
 
-        for (; find.first != find.second; ++find.first) {
-            String prefix = GetPrefix(index);
-            String suffix = GetSuffix(HashIndices[find.first - subs]);
-            add_match(prefix + suffix);
+            const u8* subs = SubHashes.data();
+
+            auto find = std::equal_range(&subs[bucket_start], &subs[bucket_end], hash & 0xFF);
+
+            for (; find.first != find.second; ++find.first) {
+                String prefix = GetPrefix(j);
+                String suffix = GetSuffix(HashIndices[find.first - subs]);
+                add_match(prefix + suffix);
+            }
         }
-    };
 
-    FindMatches(
-        hashes, hash_count, Filter.data(), [](void* context, usize index) {
-            (*static_cast<decltype(&process_match)>(context))(index);
-        },
-        &process_match);
+        return true;
+    });
 
     flush_matches();
 
@@ -607,7 +597,7 @@ int main(int argc, char** argv)
     auto start = Stopwatch::now();
 
     Collider collider(0, hashes, parts);
-    collider.Compile(usize(1) << 28, usize(1) << 31);
+    collider.Compile(usize(1) << 28, usize(1) << 30);
 
     printf("Searching\n");
 
@@ -618,7 +608,9 @@ int main(int argc, char** argv)
 
     printf("Found %zu/%zu results in %lli ms\n", found.size(), total, delta);
 
-    for (String str : found) {
-        output << str << "\n";
+    if (output) {
+        for (String str : found) {
+            output << str << "\n";
+        }
     }
 }
