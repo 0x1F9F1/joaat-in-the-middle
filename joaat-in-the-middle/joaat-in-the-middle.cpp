@@ -353,26 +353,12 @@ void Collider::Compile(usize prefix_table_size, usize suffix_table_size)
     printf("Compiling...\n");
 
     while (PrefixPos != SuffixPos) {
-        const Vec<String>& next_prefix = Parts[PrefixPos];
-        const Vec<String>& next_suffix = Parts[SuffixPos - 1];
-
-        usize next_prefix_size = Prefixes[PrefixPos].size() * next_prefix.size();
-        usize next_suffix_size = Suffixes.size() * next_suffix.size();
-
-        bool more_prefixes = next_prefix_size < prefix_table_size;
-        bool more_suffixes = next_suffix_size < suffix_table_size;
-
-        if (more_prefixes && more_suffixes) {
-            more_prefixes = next_prefix_size < next_suffix_size;
-            more_suffixes = !more_prefixes;
-        }
-
-        if (more_prefixes) {
-            printf("Expanding Prefixes %zu\n", PrefixPos);
-            PushPrefix(next_prefix.data(), next_prefix.size());
-        } else if (more_suffixes) {
+        if (const Vec<String>& next_suffix = Parts[SuffixPos - 1]; next_suffix.size() < suffix_table_size / Suffixes.size()) {
             printf("Expanding Suffixes %zu\n", SuffixPos - 1);
             PushSuffix(next_suffix.data(), next_suffix.size());
+        } else if (const Vec<String>& next_prefix = Parts[PrefixPos]; next_prefix.size() < prefix_table_size / Prefixes[PrefixPos].size()) {
+            printf("Expanding Prefixes %zu\n", PrefixPos);
+            PushPrefix(next_prefix.data(), next_prefix.size());
         } else {
             break;
         }
