@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <fstream>
 #include <future>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -442,10 +443,11 @@ usize Collider::Match(HashSet<String>& found)
 
     usize total = 0;
 
-    std::mutex match_lock;
+    std::shared_mutex match_lock;
+    std::condition_variable_any match_cond;
+
     std::mutex buffer_lock;
     std::mutex found_lock;
-    std::condition_variable cond;
 
     const usize buffer_size = 0x1000;
     auto match_buffer = std::make_unique<std::string[]>(buffer_size);
@@ -460,11 +462,11 @@ usize Collider::Match(HashSet<String>& found)
         std::unique_lock match_guard { match_lock };
 
         match_buffer.swap(found_buffer);
-        usize count = head.exchange(0);
-        tail = 0;
+        usize count = tail.exchange(0);
+        head = 0;
 
         match_guard.unlock();
-        cond.notify_all();
+        match_cond.notify_all();
 
         HashSet<String> sub_found(std::make_move_iterator(&found_buffer[0]), std::make_move_iterator(&found_buffer[count]));
         buffer_guard.unlock();
@@ -475,22 +477,21 @@ usize Collider::Match(HashSet<String>& found)
     };
 
     const auto add_match = [&](String match) {
-        usize index = tail.fetch_add(1);
+        usize index = head++;
 
-        while (index >= buffer_size) {
-            std::unique_lock guard { match_lock };
+        if (index >= buffer_size) {
+            std::shared_lock guard { match_lock };
 
-            index = tail.fetch_add(1);
+            match_cond.wait(guard, [&] {
+                index = head++;
 
-            if (index < buffer_size)
-                break;
-
-            cond.wait(guard);
+                return index < buffer_size;
+            });
         }
 
         match_buffer[index] = std::move(match);
 
-        if (head.fetch_add(1) == buffer_size - 1) {
+        if (++tail == buffer_size) {
             flush_matches();
         }
     };
