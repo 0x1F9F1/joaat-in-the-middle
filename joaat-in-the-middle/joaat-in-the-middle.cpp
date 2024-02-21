@@ -14,6 +14,8 @@
 
 #include "parallel.h"
 
+#include "unordered_dense.h"
+
 using usize = std::size_t;
 using u8 = std::uint8_t;
 using u32 = std::uint32_t;
@@ -25,7 +27,7 @@ template <typename T>
 using Vec = std::vector<T>;
 
 template <typename Key>
-using HashSet = std::unordered_set<Key>;
+using HashSet = ankerl::unordered_dense::segmented_set<Key>;
 
 template <typename T, typename U>
 using Pair = std::pair<T, U>;
@@ -99,8 +101,9 @@ struct Collider {
 
     void PushSuffix(const String* prefixes, usize prefix_count);
 
-    String GetPrefix(usize index);
-    String GetSuffix(usize index);
+    void GetPrefix(String& buffer, usize index);
+    void _GetPrefix(String& buffer, usize index, usize i, usize prefix_count);
+    void GetSuffix(String& buffer, usize index);
 
     void Compile(usize prefix_table_size, usize suffix_table_size);
 
@@ -253,38 +256,45 @@ void Collider::PushSuffix(const String* prefixes, usize prefix_count)
     CurrentParts[SuffixPos] = { prefixes, prefix_count };
 }
 
-String Collider::GetPrefix(usize index)
+void Collider::_GetPrefix(String& buffer, usize index, usize i, usize prefix_count)
 {
-    String result;
-
-    usize prefix_count = Prefixes[PrefixPos].size();
-
-    for (usize i = PrefixPos; i != 0; --i) {
-        const auto& [suffixes, suffix_count] = CurrentParts[i - 1];
-        prefix_count /= suffix_count;
-
-        result.insert(0, suffixes[index / prefix_count]);
-        index %= prefix_count;
+    if (i == 0) {
+        return;
     }
 
-    return result;
+    --i;
+
+    const auto& [suffixes, suffix_count] = CurrentParts[i];
+    prefix_count /= suffix_count;
+
+    StringView suffix = suffixes[index / prefix_count];
+    index %= prefix_count;
+
+    _GetPrefix(buffer, index, i, prefix_count);
+
+    buffer.insert(buffer.end(), suffix.begin(), suffix.end());
 }
 
-String Collider::GetSuffix(usize index)
+void Collider::GetPrefix(String& buffer, usize index)
 {
-    String result;
+    usize prefix_count = Prefixes[PrefixPos].size();
 
+    _GetPrefix(buffer, index, PrefixPos, prefix_count);
+}
+
+void Collider::GetSuffix(String& buffer, usize index)
+{
     usize suffix_count = SubHashes.size();
 
     for (usize i = SuffixPos; i != Parts.size(); ++i) {
         const auto& [prefixes, prefix_count] = CurrentParts[i];
         suffix_count /= prefix_count;
 
-        result.append(prefixes[index / suffix_count]);
+        String prefix = prefixes[index / suffix_count];
         index %= suffix_count;
-    }
 
-    return result;
+        buffer.insert(buffer.end(), prefix.begin(), prefix.end());
+    }
 }
 
 static void SortHashesWithIndices(u32* hashes, u32* indices, usize count, u32 bit)
@@ -446,33 +456,32 @@ usize Collider::Match(HashSet<String>& found)
     std::shared_mutex match_lock;
     std::condition_variable_any match_cond;
 
-    std::mutex buffer_lock;
     std::mutex found_lock;
 
     const usize buffer_size = 0x1000;
-    auto match_buffer = std::make_unique<std::string[]>(buffer_size);
-    auto found_buffer = std::make_unique<std::string[]>(buffer_size);
+    auto match_buffer = std::make_unique<String[]>(buffer_size);
+    auto found_buffer = std::make_unique<String[]>(buffer_size);
 
     std::atomic<usize> head = 0;
     std::atomic<usize> tail = 0;
 
     auto flush_matches = [&] {
-        std::unique_lock buffer_guard { buffer_lock };
+        std::lock_guard found_guard { found_lock };
 
-        std::unique_lock match_guard { match_lock };
+        usize count = 0;
 
-        match_buffer.swap(found_buffer);
-        usize count = tail.exchange(0);
-        head = 0;
+        {
+            std::unique_lock match_guard { match_lock };
 
-        match_guard.unlock();
+            match_buffer.swap(found_buffer);
+            count = tail.exchange(0);
+            head = 0;
+        }
+
         match_cond.notify_all();
 
-        HashSet<String> sub_found(std::make_move_iterator(&found_buffer[0]), std::make_move_iterator(&found_buffer[count]));
-        buffer_guard.unlock();
+        found.insert(std::make_move_iterator(&found_buffer[0]), std::make_move_iterator(&found_buffer[count]));
 
-        std::lock_guard found_guard { found_lock };
-        found.merge(std::move(sub_found));
         total += count;
     };
 
@@ -480,9 +489,9 @@ usize Collider::Match(HashSet<String>& found)
         usize index = head++;
 
         if (index >= buffer_size) {
-            std::shared_lock guard { match_lock };
+            std::shared_lock match_guard { match_lock };
 
-            match_cond.wait(guard, [&] {
+            match_cond.wait(match_guard, [&] {
                 index = head++;
 
                 return index < buffer_size;
@@ -515,9 +524,10 @@ usize Collider::Match(HashSet<String>& found)
             auto find = std::find(start, end, sub_hash);
 
             for (; (find != end) && (*find == sub_hash); ++find) {
-                String prefix = GetPrefix(j);
-                String suffix = GetSuffix(HashIndices[find - subs]);
-                add_match(prefix + suffix);
+                String match;
+                GetPrefix(match, j);
+                GetSuffix(match, HashIndices[find - subs]);
+                add_match(std::move(match));
             }
         }
 
