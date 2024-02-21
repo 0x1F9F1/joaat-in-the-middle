@@ -73,6 +73,37 @@ static u32 joaat_definalize(u32 hash)
     return hash;
 }
 
+struct MatchSet {
+    static const usize BufferSize = 0x1000;
+
+    HashSet<String> Values;
+
+    std::shared_mutex MatchLock;
+    std::condition_variable_any MatchCond;
+
+    std::mutex FoundLock;
+
+    std::unique_ptr<String[]> MatchBuffer = std::make_unique<String[]>(BufferSize);
+    std::unique_ptr<String[]> FoundBuffer = std::make_unique<String[]>(BufferSize);
+
+    std::atomic<usize> Head = 0;
+    std::atomic<usize> Tail = 0;
+
+    void insert(String&& value);
+
+    void flush();
+
+    usize size() const
+    {
+        return Values.size();
+    }
+
+    const HashSet<String>& values() const
+    {
+        return Values;
+    }
+};
+
 using FilterWord = u32;
 
 struct Collider {
@@ -101,14 +132,14 @@ struct Collider {
 
     void PushSuffix(const String* prefixes, usize prefix_count);
 
-    void GetPrefix(String& buffer, usize index);
-    void _GetPrefix(String& buffer, usize index, usize i, usize prefix_count);
-    void GetSuffix(String& buffer, usize index);
+    void GetPrefix(String& buffer, usize index) const;
+    void _GetPrefix(String& buffer, usize index, usize i, usize prefix_count) const;
+    void GetSuffix(String& buffer, usize index) const;
 
     void Compile(usize prefix_table_size, usize suffix_table_size);
 
-    usize Match(HashSet<String>& found);
-    usize Collide(HashSet<String>& found);
+    void Match(MatchSet& found) const;
+    void Collide(MatchSet& found);
 };
 
 template <typename T>
@@ -132,6 +163,46 @@ static inline void bit_set(T* bits, usize index)
     constexpr usize Radix = sizeof(T) * CHAR_BIT;
 
     bits[index / Radix] |= (T(1) << (index % Radix));
+}
+
+void MatchSet::insert(String&& value)
+{
+    usize index = Head++;
+
+    if (index >= BufferSize) {
+        std::shared_lock match_guard { MatchLock };
+
+        MatchCond.wait(match_guard, [&] {
+            index = Head++;
+
+            return index < BufferSize;
+        });
+    }
+
+    MatchBuffer[index] = std::move(value);
+
+    if (++Tail == BufferSize) {
+        flush();
+    }
+}
+
+void MatchSet::flush()
+{
+    std::lock_guard found_guard { FoundLock };
+
+    usize count = 0;
+
+    {
+        std::unique_lock match_guard { MatchLock };
+
+        MatchBuffer.swap(FoundBuffer);
+        count = Tail.exchange(0);
+        Head = 0;
+    }
+
+    MatchCond.notify_all();
+
+    Values.insert(std::make_move_iterator(&FoundBuffer[0]), std::make_move_iterator(&FoundBuffer[count]));
 }
 
 Collider::Collider(u32 seed, Vec<u32> hashes, Vec<Vec<String>> parts)
@@ -293,7 +364,7 @@ void Collider::PushSuffix(const String* prefixes, usize prefix_count)
     CurrentParts[SuffixPos] = { prefixes, prefix_count };
 }
 
-void Collider::_GetPrefix(String& buffer, usize index, usize i, usize prefix_count)
+void Collider::_GetPrefix(String& buffer, usize index, usize i, usize prefix_count) const
 {
     if (i == 0) {
         return;
@@ -312,14 +383,14 @@ void Collider::_GetPrefix(String& buffer, usize index, usize i, usize prefix_cou
     buffer.insert(buffer.end(), suffix.begin(), suffix.end());
 }
 
-void Collider::GetPrefix(String& buffer, usize index)
+void Collider::GetPrefix(String& buffer, usize index) const
 {
     usize prefix_count = Prefixes[PrefixPos].size();
 
     _GetPrefix(buffer, index, PrefixPos, prefix_count);
 }
 
-void Collider::GetSuffix(String& buffer, usize index)
+void Collider::GetSuffix(String& buffer, usize index) const
 {
     usize suffix_count = SubHashes.size();
 
@@ -327,7 +398,7 @@ void Collider::GetSuffix(String& buffer, usize index)
         const auto& [prefixes, prefix_count] = CurrentParts[i];
         suffix_count /= prefix_count;
 
-        String prefix = prefixes[index / suffix_count];
+        StringView prefix = prefixes[index / suffix_count];
         index %= suffix_count;
 
         buffer.insert(buffer.end(), prefix.begin(), prefix.end());
@@ -481,122 +552,62 @@ void Collider::Compile(usize prefix_table_size, usize suffix_table_size)
     printf("Compiled: %zu/%zu (%zu/%zu)\n", PrefixPos, SuffixPos, prefix_count, suffix_count);
 }
 
-usize Collider::Match(HashSet<String>& found)
+void Collider::Match(MatchSet& found) const
 {
-    const u32* hashes = Prefixes[PrefixPos].data();
-    usize hash_count = Prefixes[PrefixPos].size();
+    const auto add_matches = [this, &found](usize index, u32 hash) {
+        usize hash_bucket = hash >> 8;
+        u8 sub_hash = hash & 0xFF;
 
-    // printf("Matching %zu\n", hash_count);
+        const u8* subs = SubHashes.data();
+        const u8* start = &subs[hash_bucket ? HashBuckets[hash_bucket - 1] : 0];
+        const u8* end = &subs[HashBuckets[hash_bucket]];
+        const u8* find = std::find(start, end, sub_hash);
 
-    usize total = 0;
-
-    std::shared_mutex match_lock;
-    std::condition_variable_any match_cond;
-
-    std::mutex found_lock;
-
-    const usize buffer_size = 0x1000;
-    auto match_buffer = std::make_unique<String[]>(buffer_size);
-    auto found_buffer = std::make_unique<String[]>(buffer_size);
-
-    std::atomic<usize> head = 0;
-    std::atomic<usize> tail = 0;
-
-    auto flush_matches = [&] {
-        std::lock_guard found_guard { found_lock };
-
-        usize count = 0;
-
-        {
-            std::unique_lock match_guard { match_lock };
-
-            match_buffer.swap(found_buffer);
-            count = tail.exchange(0);
-            head = 0;
-        }
-
-        match_cond.notify_all();
-
-        found.insert(std::make_move_iterator(&found_buffer[0]), std::make_move_iterator(&found_buffer[count]));
-
-        total += count;
-    };
-
-    const auto add_match = [&](String match) {
-        usize index = head++;
-
-        if (index >= buffer_size) {
-            std::shared_lock match_guard { match_lock };
-
-            match_cond.wait(match_guard, [&] {
-                index = head++;
-
-                return index < buffer_size;
-            });
-        }
-
-        match_buffer[index] = std::move(match);
-
-        if (++tail == buffer_size) {
-            flush_matches();
+        for (; (find != end) && (*find == sub_hash); ++find) {
+            String match;
+            GetPrefix(match, index);
+            GetSuffix(match, HashIndices[find - subs]);
+            found.insert(std::move(match));
         }
     };
 
-    const FilterWord* suffix_filter = Filter.data();
+    parallel_partition(Prefixes[PrefixPos].size(), 0x10000, 0, [this, &add_matches](usize start, usize count) {
+        const FilterWord* filter = Filter.data();
+        const u32* hashes = Prefixes[PrefixPos].data();
 
-    parallel_partition(hash_count, 0x10000, 0, [=](usize start, usize count) {
         for (usize i = 0; i != count; ++i) {
             usize j = start + i;
+
             u32 hash = hashes[j] * BitMixer;
 
-            if (!bit_test(suffix_filter, hash))
+            if (!bit_test(filter, hash))
                 continue;
 
-            usize hash_bucket = hash >> 8;
-            u8 sub_hash = hash & 0xFF;
-
-            const u8* subs = SubHashes.data();
-            auto start = &subs[hash_bucket ? HashBuckets[hash_bucket - 1] : 0];
-            auto end = &subs[HashBuckets[hash_bucket]];
-            auto find = std::find(start, end, sub_hash);
-
-            for (; (find != end) && (*find == sub_hash); ++find) {
-                String match;
-                GetPrefix(match, j);
-                GetSuffix(match, HashIndices[find - subs]);
-                add_match(std::move(match));
-            }
+            add_matches(j, hash);
         }
 
         return true;
     });
 
-    flush_matches();
-
-    return total;
+    found.flush();
 }
 
-usize Collider::Collide(HashSet<String>& found)
+void Collider::Collide(MatchSet& found)
 {
     printf("Collide %zu/%zu\n", PrefixPos, SuffixPos);
 
     if (PrefixPos == SuffixPos) {
-        usize count = Match(found);
-        printf("Matches %zu/%zu\n", count, found.size());
-        return count;
+        usize before = found.size();
+        Match(found);
+        usize after = found.size();
+        printf("Matches %zu/%zu\n", after - before, after);
+    } else {
+        for (const String& part : Parts[PrefixPos]) {
+            PushPrefix(&part, 1);
+            Collide(found);
+            PopPrefix();
+        }
     }
-
-    const Vec<String>& sub_parts = Parts[PrefixPos];
-
-    usize total = 0;
-
-    for (usize i = 0; i < sub_parts.size(); ++i) {
-        PushPrefix(&sub_parts[i], 1);
-        total += Collide(found);
-        PopPrefix();
-    }
-
-    return total;
 }
 
 Vec<String> LoadFile(std::string name)
@@ -649,15 +660,15 @@ int main(int argc, char** argv)
 
     printf("Searching\n");
 
-    HashSet<String> found;
-    usize total = collider.Collide(found);
+    MatchSet found;
+    collider.Collide(found);
 
     auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(Stopwatch::now() - start).count();
 
-    printf("Found %zu/%zu results in %lli ms\n", found.size(), total, delta);
+    printf("Found %zu results in %lli ms\n", found.size(), delta);
 
     if (output) {
-        for (String str : found) {
+        for (StringView str : found.values()) {
             output << str << "\n";
         }
     }
