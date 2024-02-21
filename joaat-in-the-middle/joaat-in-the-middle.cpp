@@ -152,21 +152,36 @@ Collider::Collider(u32 seed, Vec<u32> hashes, Vec<Vec<String>> parts)
 static void ExpandHashes(const u32* __restrict input, u32* __restrict output, usize count, const void* __restrict suffix, usize suffix_length)
 {
     parallel_partition(count, 0x10000, 0, [=](usize start, usize count) {
-        if (count >= 4) {
-            do {
-                __m128i hashes = _mm_loadu_si128((const __m128i*)&input[start]);
+#ifdef __AVX2__
+        while (count >= 8) {
+            __m256i hashes = _mm256_loadu_si256((const __m256i*)&input[start]);
 
-                for (usize i = 0; i != suffix_length; ++i) {
-                    hashes = _mm_add_epi32(hashes, _mm_set1_epi32(static_cast<const unsigned char*>(suffix)[i]));
-                    hashes = _mm_add_epi32(hashes, _mm_slli_epi32(hashes, 10));
-                    hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 6));
-                }
+            for (usize i = 0; i != suffix_length; ++i) {
+                hashes = _mm256_add_epi32(hashes, _mm256_set1_epi32(static_cast<const unsigned char*>(suffix)[i]));
+                hashes = _mm256_add_epi32(hashes, _mm256_slli_epi32(hashes, 10));
+                hashes = _mm256_xor_si256(hashes, _mm256_srli_epi32(hashes, 6));
+            }
 
-                _mm_storeu_si128((__m128i*)&output[start], hashes);
+            _mm256_storeu_si256((__m256i*)&output[start], hashes);
 
-                start += 4;
-                count -= 4;
-            } while (count >= 4);
+            start += 8;
+            count -= 8;
+        }
+#endif
+
+        while (count >= 4) {
+            __m128i hashes = _mm_loadu_si128((const __m128i*)&input[start]);
+
+            for (usize i = 0; i != suffix_length; ++i) {
+                hashes = _mm_add_epi32(hashes, _mm_set1_epi32(static_cast<const unsigned char*>(suffix)[i]));
+                hashes = _mm_add_epi32(hashes, _mm_slli_epi32(hashes, 10));
+                hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 6));
+            }
+
+            _mm_storeu_si128((__m128i*)&output[start], hashes);
+
+            start += 4;
+            count -= 4;
         }
 
         for (usize i = 0; i != count; ++i) {
@@ -204,28 +219,50 @@ void Collider::PopPrefix()
 static void ShrinkHashes(const u32* __restrict input, u32* __restrict output, usize count, const void* __restrict prefix, usize prefix_length)
 {
     parallel_partition(count, 0x10000, 0, [=](usize start, usize count) {
-        if (count >= 4) {
-            do {
-                __m128i hashes = _mm_loadu_si128((const __m128i*)&input[start]);
+#ifdef __AVX2__
+        while (count >= 8) {
+            __m256i hashes = _mm256_loadu_si256((const __m256i*)&input[start]);
 
-                for (usize i = prefix_length; i != 0; --i) {
-                    __m128i value = _mm_set1_epi32(static_cast<const unsigned char*>(prefix)[i - 1]);
+            for (usize i = prefix_length; i != 0; --i) {
+                __m256i value = _mm256_set1_epi32(static_cast<const unsigned char*>(prefix)[i - 1]);
 
-                    hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 6));
-                    hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 12));
-                    hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 24));
+                hashes = _mm256_xor_si256(hashes, _mm256_srli_epi32(hashes, 6));
+                hashes = _mm256_xor_si256(hashes, _mm256_srli_epi32(hashes, 12));
+                hashes = _mm256_xor_si256(hashes, _mm256_srli_epi32(hashes, 24));
 
-                    hashes = _mm_sub_epi32(hashes, _mm_slli_epi32(hashes, 10));
-                    hashes = _mm_add_epi32(hashes, _mm_slli_epi32(hashes, 20));
+                hashes = _mm256_sub_epi32(hashes, _mm256_slli_epi32(hashes, 10));
+                hashes = _mm256_add_epi32(hashes, _mm256_slli_epi32(hashes, 20));
 
-                    hashes = _mm_sub_epi32(hashes, value);
-                }
+                hashes = _mm256_sub_epi32(hashes, value);
+            }
 
-                _mm_storeu_si128((__m128i*)&output[start], hashes);
+            _mm256_storeu_si256((__m256i*)&output[start], hashes);
 
-                start += 4;
-                count -= 4;
-            } while (count >= 4);
+            start += 8;
+            count -= 8;
+        }
+#endif
+
+        while (count >= 4) {
+            __m128i hashes = _mm_loadu_si128((const __m128i*)&input[start]);
+
+            for (usize i = prefix_length; i != 0; --i) {
+                __m128i value = _mm_set1_epi32(static_cast<const unsigned char*>(prefix)[i - 1]);
+
+                hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 6));
+                hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 12));
+                hashes = _mm_xor_si128(hashes, _mm_srli_epi32(hashes, 24));
+
+                hashes = _mm_sub_epi32(hashes, _mm_slli_epi32(hashes, 10));
+                hashes = _mm_add_epi32(hashes, _mm_slli_epi32(hashes, 20));
+
+                hashes = _mm_sub_epi32(hashes, value);
+            }
+
+            _mm_storeu_si128((__m128i*)&output[start], hashes);
+
+            start += 4;
+            count -= 4;
         }
 
         for (usize i = 0; i != count; ++i) {
