@@ -405,6 +405,18 @@ void Collider::GetSuffix(String& buffer, usize index) const
     }
 }
 
+// This sorts two unsigned integer arrays, based on the values of the first array.
+// It uses a hybrid sorting algorithm:
+// * Large partitions use in-place parallel MSD radix sort
+// * Small partitions use insertion sort
+// 
+// This combination was chosen to:
+// * Avoid memory allocations
+// * Reduce cache misses
+// * Enable parallel sorting
+//
+// The radix sort could be replaced with a different partitioning scheme,
+// but this seems unnecessary given that the hashes are expected to be randomly distributed.
 static void SortHashesWithIndices(u32* hashes, u32* indices, usize count, u32 bit)
 {
     if (count < 16) {

@@ -10,3 +10,11 @@ The code is focused more on using fast algorithms, rather than micro-optimisatio
 * SIMD hashing
 * Multi-threaded hashing and matching
 * Using the original position of the hash to encode its string value (avoiding the need to store the string representation of each hash).
+
+```
+>jitm.exe $1F9F1 results.txt alphanum.txt alphanum.txt alphanum.txt alphanum.txt alphanum.txt alphanum.txt alphanum.txt alphanum.txt alphanum.txt alphanum.txt alphanum.txt
+Loading hashes
+Compiling...
+<...>
+Found 42569552 results in 15695 ms
+```
